@@ -1,0 +1,52 @@
+server:
+  http_listen_port: 3200
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+  trace_idle_period: 10s
+  flush_check_period: 10s
+
+compactor:
+  compaction:
+    block_retention: 336h # 14 days
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
+
+metrics_generator:
+  # Generate RED metrics (rate, errors, duration) from traces automatically
+  # These are pushed to Mimir - no manual instrumentation needed for basic metrics
+  registry:
+    external_labels:
+      source: tempo
+      cluster: chat-local
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://mimir:9009/api/v1/push
+        send_exemplars: true
+        headers:
+          X-Scope-OrgID: chat
+  processors:
+    - service-graphs
+    - span-metrics
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics]
