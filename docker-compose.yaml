@@ -1,176 +1,240 @@
 version: "3.9"
 
-networks:
-  chat-net:
-    name: chat-net
-    driver: bridge
+# Top-level secrets - Docker reads plaintext files, injects as /run/secrets/*
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+  nats_password:
+    file: ./secrets/nats_password.txt
+
+# Named volumes
 
 volumes:
-  postgres-data:
-  redis-data:
-  nats-data:
-  prometheus-data:
-  loki-data:
-  grafana-data:
+  postgres_data:
+  redis_data:
+  nats_data:
+  grafana_data:
+  loki_data:
+  minio_data:
+
+# Networks - all internal except the Caddy edge network
+
+networks:
+  edge: # Caddy ↔ services
+  internal: # service ↔ service (no external access)
+  observability: # metrics scraping
+
+# Services
 
 services:
+  #  Reverse Proxy
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_certs:/config
+    networks:
+      - edge
+    depends_on:
+      - gateway
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:2019/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  #  PostgreSQL
   postgres:
     image: postgres:16-alpine
-    container_name: chat-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-chatuser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
-      POSTGRES_DB: ${POSTGRES_DB:-chatdb}
-      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
-    ports:
-      - "127.0.0.1:5432:5432"
     networks:
-      - chat-net
+      - internal
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-chatuser} -d ${POSTGRES_DB:-chatdb}",
-        ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
-    security_opt:
-      - no-new-privileges:true
 
+  #  Redis
   redis:
-    image: redis:7-alpine
-    container_name: chat-redis
+    image: redis:7.2-alpine
     restart: unless-stopped
     command: >
-      redis-server
-      --requirepass ${REDIS_PASSWORD:?required}
-      --appendonly yes
-      --appendfsync everysec
-      --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
-      --protected-mode yes
+      sh -c "redis-server /etc/redis/redis.conf
+             --requirepass $$(cat /run/secrets/redis_password)"
+    secrets:
+      - redis_password
     volumes:
-      - redis-data:/data
-    ports:
-      - "127.0.0.1:6379:6379"
+      - redis_data:/data
+      - ./redis/redis.conf:/etc/redis/redis.conf:ro
     networks:
-      - chat-net
+      - internal
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: >
+        sh -c "redis-cli -a $$(cat /run/secrets/redis_password) ping | grep PONG"
       interval: 10s
       timeout: 5s
       retries: 5
-    security_opt:
-      - no-new-privileges:true
 
+  #  NATS
   nats:
     image: nats:2.10-alpine
-    container_name: chat-nats
     restart: unless-stopped
-    command: >
-      -js
-      -m 8222
-      -sd /data
-      --user ${NATS_USER:-natsuser}
-      --pass ${NATS_PASSWORD:?required}
-      --max_payload 1MB
-      --max_connections 10000
+    command: ["-c", "/etc/nats/nats.conf"]
+    secrets:
+      - nats_password
     volumes:
-      - nats-data:/data
-    ports:
-      - "127.0.0.1:4222:4222"
-      - "127.0.0.1:8222:8222"
+      - ./nats/nats.conf:/etc/nats/nats.conf:ro
+      - nats_data:/data
     networks:
-      - chat-net
+      - internal
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz || exit 1"]
+      test: ["CMD", "nats-server", "--health"]
       interval: 10s
       timeout: 5s
-      retries: 5
-    security_opt:
-      - no-new-privileges:true
+      retries: 3
 
+  #  Gateway Service
+  gateway:
+    image: chat-gateway:latest
+    build:
+      context: ../chat-gateway # sibling repo checkout
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      LISTEN_ADDR: ":${GATEWAY_PORT}"
+      AUTH_SERVICE_URL: http://auth:${AUTH_PORT}
+      REDIS_ADDR: redis:6379
+      POSTGRES_DSN: "host=postgres user=${POSTGRES_USER} dbname=${POSTGRES_DB} sslmode=disable"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_ENDPOINT}
+      # Secrets injected via files - read at startup
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+    secrets:
+      - redis_password
+      - postgres_password
+      - jwt_secret
+    networks:
+      - edge
+      - internal
+      - observability
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:${GATEWAY_PORT}/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  #  Auth Service
+  auth:
+    image: chat-auth:latest
+    build:
+      context: ../chat-auth
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      LISTEN_ADDR: ":${AUTH_PORT}"
+      POSTGRES_DSN: "host=postgres user=${POSTGRES_USER} dbname=${POSTGRES_DB} sslmode=disable"
+      REDIS_ADDR: redis:6379
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_ENDPOINT}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      NATS_PASSWORD_FILE: /run/secrets/nats_password
+    secrets:
+      - postgres_password
+      - redis_password
+      - jwt_secret
+      - nats_password
+    networks:
+      - internal
+      - observability
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  #  OpenTelemetry Collector
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.99.0
-    container_name: chat-otel-collector
     restart: unless-stopped
-    command: ["--config=/etc/otel/config.yaml"]
+    command: ["--config=/etc/otel/otel-collector.yml"]
     volumes:
-      - ./observability/otel-collector/config.yaml:/etc/otel/config.yaml:ro
-    ports:
-      - "127.0.0.1:4317:4317"
-      - "127.0.0.1:4318:4318"
-      - "127.0.0.1:8888:8888"
+      - ./otel/otel-collector.yml:/etc/otel/otel-collector.yml:ro
     networks:
-      - chat-net
-    depends_on:
-      - prometheus
-      - loki
-    security_opt:
-      - no-new-privileges:true
+      - observability
+      - internal
 
+  #  Prometheus
   prometheus:
     image: prom/prometheus:v2.51.2
-    container_name: chat-prometheus
     restart: unless-stopped
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
       - "--web.enable-lifecycle"
-      - "--web.enable-remote-write-receiver"
     volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    ports:
-      - "127.0.0.1:9090:9090"
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
     networks:
-      - chat-net
-    security_opt:
-      - no-new-privileges:true
+      - observability
 
+  #  Loki
   loki:
-    image: grafana/loki:2.9.7
-    container_name: chat-loki
+    image: grafana/loki:2.9.6
     restart: unless-stopped
-    command: -config.file=/etc/loki/config.yaml
+    command: ["-config.file=/etc/loki/local-config.yaml"]
     volumes:
-      - ./observability/loki/config.yaml:/etc/loki/config.yaml:ro
-      - loki-data:/loki
-    ports:
-      - "127.0.0.1:3100:3100"
+      - loki_data:/loki
     networks:
-      - chat-net
-    security_opt:
-      - no-new-privileges:true
+      - observability
 
+  #  Grafana
   grafana:
     image: grafana/grafana:10.4.2
-    container_name: chat-grafana
     restart: unless-stopped
     environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?required}
-      GF_SECURITY_DISABLE_GRAVATAR: "true"
-      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/postgres_password # reuse or add grafana_password secret
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
-      GF_SERVER_ROOT_URL: ${GRAFANA_URL:-http://localhost:3000}
     volumes:
-      - grafana-data:/var/lib/grafana
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
-    ports:
-      - "127.0.0.1:3000:3000"
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     networks:
-      - chat-net
+      - observability
+      - edge
     depends_on:
       - prometheus
       - loki
-    security_opt:
-      - no-new-privileges:true
