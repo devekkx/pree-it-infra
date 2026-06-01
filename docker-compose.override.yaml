@@ -18,10 +18,10 @@ services:
     build:
       target: dev # uses air hot-reload stage
     volumes:
-      - ../chat-gateway:/app
+      - ../preeit-gateway:/app
 
   auth:
     build:
       target: dev
     volumes:
-      - ../chat-auth:/app
+      - ../preeit-auth:/app

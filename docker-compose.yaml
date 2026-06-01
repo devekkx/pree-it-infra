@@ -115,9 +115,9 @@ services:
 
   #  Gateway Service
   gateway:
-    image: chat-gateway:latest
+    image: preeit-gateway:latest
     build:
-      context: ../chat-gateway # sibling repo checkout
+      context: ../preeit-gateway # sibling repo checkout
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -154,9 +154,9 @@ services:
 
   #  Auth Service
   auth:
-    image: chat-auth:latest
+    image: preeit-auth:latest
     build:
-      context: ../chat-auth
+      context: ../preeit-auth
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:

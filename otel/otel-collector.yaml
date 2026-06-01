@@ -43,7 +43,7 @@ processors:
         value: production
         action: upsert
       - key: cluster
-        value: chat-local
+        value: preeit-local
         action: upsert
 
   # Tail-based sampling: keep 100% of errored traces, 10% of healthy ones
@@ -68,7 +68,7 @@ exporters:
     tls:
       insecure: true
     headers:
-      X-Scope-OrgID: chat
+      X-Scope-OrgID: preeit
 
   # Logs - Loki
   loki:
