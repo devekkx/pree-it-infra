@@ -1,0 +1,27 @@
+# Local development conveniences -never used in CI/prod
+version: "3.9"
+
+services:
+  postgres:
+    ports:
+      - "5432:5432" # expose for local DB tools
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  grafana:
+    ports:
+      - "3001:3000"
+
+  gateway:
+    build:
+      target: dev # uses air hot-reload stage
+    volumes:
+      - ../chat-gateway:/app
+
+  auth:
+    build:
+      target: dev
+    volumes:
+      - ../chat-auth:/app
