@@ -1,5 +1,11 @@
 file_format: "1.0"
 
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
+
 receivers:
   otlp:
     protocols:
@@ -8,41 +14,98 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
+  # Scrape Caddy's built-in Prometheus metrics
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: caddy
+          static_configs:
+            - targets: ["caddy:2019"]
+        - job_name: nats
+          static_configs:
+            - targets: ["nats:8222"]
+          metrics_path: /metrics
+
 processors:
   batch:
     timeout: 1s
     send_batch_size: 1024
+
   memory_limiter:
     check_interval: 1s
-    limit_mib: 256
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  # Enrich every signal with service metadata
   resource:
     attributes:
       - key: environment
         value: production
         action: upsert
+      - key: cluster
+        value: chat-local
+        action: upsert
+
+  # Tail-based sampling: keep 100% of errored traces, 10% of healthy ones
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    policies:
+      - name: errors-policy
+        type: status_code
+        status_code: { status_codes: [ERROR] }
+      - name: slow-policy
+        type: latency
+        latency: { threshold_ms: 500 }
+      - name: probabilistic-policy
+        type: probabilistic
+        probabilistic: { sampling_percentage: 10 }
 
 exporters:
-  prometheus:
-    endpoint: "0.0.0.0:8889"
+  # Metrics - Mimir (Prometheus remote_write compatible)
+  prometheusremotewrite:
+    endpoint: http://mimir:9009/api/v1/push
+    tls:
+      insecure: true
+    headers:
+      X-Scope-OrgID: chat
+
+  # Logs - Loki
   loki:
     endpoint: http://loki:3100/loki/api/v1/push
-  # For traces (Tempo wired in Phase 2)
+    default_labels_enabled:
+      exporter: false
+      job: true
+      instance: true
+      level: true
+    tls:
+      insecure: true
+
+  # Traces - Tempo (OTLP)
   otlp/tempo:
     endpoint: http://tempo:4317
     tls:
       insecure: true
 
+  # Debug exporter - disable in prod by removing from pipelines
+  debug:
+    verbosity: basic
+
 service:
+  extensions: [health_check, pprof]
+
   pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [otlp/tempo]
     metrics:
-      receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [prometheus]
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheusremotewrite]
+
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource, batch]
       exporters: [loki]
+
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, tail_sampling, batch]
+      exporters: [otlp/tempo]
