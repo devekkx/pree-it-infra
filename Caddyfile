@@ -52,7 +52,7 @@
         reverse_proxy gateway:8080
     }
 
-    # Grafana (internal access only — IP restricted) 
+    # Grafana (internal access only - IP restricted) 
     handle /grafana/* {
         @denied not remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
         abort @denied
