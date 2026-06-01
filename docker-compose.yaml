@@ -186,55 +186,105 @@ services:
       nats:
         condition: service_healthy
 
-  #  OpenTelemetry Collector
+  # OpenTelemetry Collector
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.99.0
+    image: otel/opentelemetry-collector-contrib:0.101.0
     restart: unless-stopped
     command: ["--config=/etc/otel/otel-collector.yml"]
     volumes:
-      - ./otel/otel-collector.yml:/etc/otel/otel-collector.yml:ro
+      - ./observability/otel-collector.yml:/etc/otel/otel-collector.yml:ro
     networks:
       - observability
       - internal
+    depends_on:
+      - loki
+      - tempo
+      - mimir
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:13133/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
-  #  Prometheus
-  prometheus:
-    image: prom/prometheus:v2.51.2
-    restart: unless-stopped
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.retention.time=15d"
-      - "--web.enable-lifecycle"
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    networks:
-      - observability
-
-  #  Loki
+  # Loki (log aggregation)
   loki:
-    image: grafana/loki:2.9.6
+    image: grafana/loki:3.0.0
     restart: unless-stopped
-    command: ["-config.file=/etc/loki/local-config.yaml"]
+    command: ["-config.file=/etc/loki/loki.yml"]
     volumes:
+      - ./observability/loki/loki.yml:/etc/loki/loki.yml:ro
       - loki_data:/loki
     networks:
       - observability
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:3100/ready | grep -q ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  #  Grafana
+  # Tempo (distributed tracing)
+  tempo:
+    image: grafana/tempo:2.4.1
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    volumes:
+      - ./observability/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo_data:/var/tempo
+    networks:
+      - observability
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:3200/ready | grep -q ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Mimir (scalable Prometheus-compatible metrics)
+  mimir:
+    image: grafana/mimir:2.12.0
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/mimir/mimir.yml"
+      - "--target=all" # monolithic mode for Phase 1
+    volumes:
+      - ./observability/mimir/mimir.yml:/etc/mimir/mimir.yml:ro
+      - mimir_data:/data/mimir
+    networks:
+      - observability
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:9009/ready | grep -q ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Grafana
   grafana:
-    image: grafana/grafana:10.4.2
+    image: grafana/grafana:11.0.0
     restart: unless-stopped
     environment:
-      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/postgres_password # reuse or add grafana_password secret
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor traceToMetrics"
+      # Correlate logs → traces automatically
+      GF_EXPLORE_ENABLED: "true"
+    secrets:
+      - grafana_password
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
     networks:
       - observability
       - edge
     depends_on:
-      - prometheus
       - loki
+      - tempo
+      - mimir
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
