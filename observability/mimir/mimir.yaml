@@ -1,0 +1,61 @@
+# Monolithic mode for Phase 1 - all components in one process.
+# Switch to microservices mode (--target=ingester etc.) when scaling.
+
+target: all
+
+server:
+  http_listen_port: 9009
+  grpc_listen_port: 9095
+  log_level: warn
+
+common:
+  storage:
+    backend: filesystem
+    filesystem:
+      dir: /data/mimir
+
+blocks_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/mimir/blocks
+  tsdb:
+    dir: /data/mimir/tsdb
+    block_ranges_period: [2h]
+    retention_period: 0 # never delete - compactor handles via limits
+
+compactor:
+  data_dir: /data/mimir/compactor
+  sharding_ring:
+    kvstore:
+      store: memberlist
+
+distributor:
+  ring:
+    kvstore:
+      store: memberlist
+
+ingester:
+  ring:
+    kvstore:
+      store: memberlist
+    replication_factor: 1 # single node in Phase 1
+
+store_gateway:
+  sharding_ring:
+    replication_factor: 1
+
+ruler:
+  rule_path: /data/mimir/rules
+  alertmanager_url: http://localhost:9093
+
+limits:
+  # Per-tenant retention
+  compactor_blocks_retention_period: 720h # 30 days
+  max_global_series_per_user: 1500000
+  ingestion_rate: 150000
+  ingestion_burst_size: 300000
+  # Accept out-of-order samples (clock skew in distributed systems)
+  out_of_order_time_window: 10m
+
+memberlist:
+  join_members: [] # single node
