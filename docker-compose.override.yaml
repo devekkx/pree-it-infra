@@ -1,6 +1,4 @@
 # Local development conveniences -never used in CI/prod
-version: "3.9"
-
 services:
   postgres:
     ports:

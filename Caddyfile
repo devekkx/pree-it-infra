@@ -59,4 +59,12 @@
         uri strip_prefix /grafana
         reverse_proxy grafana:3000
     }
+
+    # Storage (MinIO) - internal access only, IP restricted
+    handle /minio/* {
+    @denied not remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+    abort @denied
+    uri strip_prefix /minio
+    reverse_proxy minio:9001
+}
 }
