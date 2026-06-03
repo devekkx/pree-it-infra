@@ -11,6 +11,8 @@ secrets:
     file: ./secrets/nats_password.txt
   minio_root_password:
     file: ./secrets/minio_root_password.txt
+  grafana_password:
+    file: ./secrets/grafana_password.txt
 
 # Named volumes
 
@@ -22,8 +24,9 @@ volumes:
   nats_data:
   grafana_data:
   loki_data:
-  minio_data:
   mimir_data:
+  tempo_data:
+  minio_data:
 
 # Networks - all internal except the Caddy edge network
 
@@ -106,6 +109,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
 
   #  Redis
   redis:
@@ -127,6 +131,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   #  NATS
   nats:
@@ -150,7 +155,7 @@ services:
   gateway:
     image: preeit-gateway:latest
     build:
-      context: ../preeit-gateway # sibling repo checkout
+      context: ../pree-it-gateway # sibling repo checkout
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -189,7 +194,7 @@ services:
   auth:
     image: preeit-auth:latest
     build:
-      context: ../preeit-auth
+      context: ../pree-it-auth
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
