@@ -9,8 +9,8 @@ secrets:
     file: ./secrets/jwt_secret.txt
   nats_password:
     file: ./secrets/nats_password.txt
-  garage_root_password:
-    file: ./secrets/garage_root_password.txt
+  garage_rpc_secret:
+    file: ./secrets/garage_rpc_secret.txt
   grafana_password:
     file: ./secrets/grafana_password.txt
 
@@ -91,8 +91,7 @@ services:
       sh -c "redis-server /etc/redis/redis.conf
              --requirepass $$(cat /run/secrets/redis_password)"
     secrets:
-      - source: redis_password
-        mode: 0444
+      - redis_password
     volumes:
       - redis_data:/data
       - ./redis/redis.conf:/etc/redis/redis.conf:ro
@@ -106,33 +105,39 @@ services:
       retries: 5
       start_period: 10s
 
-  #  Gateway Service
-  gateway:
-    image: preeit-gateway:latest
+  #  Auth Service
+  auth:
+    image: preeit-auth:latest
     build:
-      context: ../pree-it-gateway
+      context: ../preeit-auth
       dockerfile: Dockerfile
       target: production
     restart: unless-stopped
+    entrypoint:
+      - sh
+      - -c
+      - |
+        export JWT_SECRET=$(cat /run/secrets/jwt_secret)
+        export POSTGRES_PASSWORD=$(cat /run/secrets/postgres_password)
+        export REDIS_PASSWORD=$(cat /run/secrets/redis_password)
+        export NATS_PASSWORD=$(cat /run/secrets/nats_password)
+        exec /auth
     environment:
       APP_ENV: production
-      LISTEN_ADDR: ":${GATEWAY_PORT}"
-      AUTH_SERVICE_URL: http://auth:${AUTH_PORT}
+      SERVICE_NAME: preeit-auth
+      LISTEN_ADDR: ":${AUTH_PORT}"
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
       REDIS_ADDR: redis:6379
-      POSTGRES_DSN: "host=postgres user=${POSTGRES_USER} dbname=${POSTGRES_DB} sslmode=disable"
+      NATS_URL: nats://nats:4222
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_ENDPOINT}
-      REDIS_PASSWORD_FILE: /run/secrets/redis_password
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-      JWT_SECRET_FILE: /run/secrets/jwt_secret
     secrets:
-      - source: redis_password
-        mode: 0444
-      - source: postgres_password
-        mode: 0444
-      - source: jwt_secret
-        mode: 0444
+      - postgres_password
+      - redis_password
+      - jwt_secret
+      - nats_password
     networks:
-      - edge
       - internal
       - observability
     depends_on:
@@ -143,40 +148,44 @@ services:
       nats:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:${GATEWAY_PORT}/health"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${AUTH_PORT}/health/live"]
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 15s
 
-  #  Auth Service
-  auth:
-    image: preeit-auth:latest
+  #  API Gateway
+  gateway:
+    image: preeit-gateway:latest
     build:
-      context: ../pree-it-auth
+      context: ../preeit-gateway
       dockerfile: Dockerfile
       target: production
     restart: unless-stopped
+    entrypoint:
+      - sh
+      - -c
+      - |
+        export JWT_SECRET=$(cat /run/secrets/jwt_secret)
+        export REDIS_PASSWORD=$(cat /run/secrets/redis_password)
+        export POSTGRES_PASSWORD=$(cat /run/secrets/postgres_password)
+        exec /gateway
     environment:
       APP_ENV: production
-      LISTEN_ADDR: ":${AUTH_PORT}"
-      POSTGRES_DSN: "host=postgres user=${POSTGRES_USER} dbname=${POSTGRES_DB} sslmode=disable"
+      SERVICE_NAME: preeit-gateway
+      LISTEN_ADDR: ":${GATEWAY_PORT}"
+      AUTH_SERVICE_URL: http://auth:${AUTH_PORT}
       REDIS_ADDR: redis:6379
-      NATS_URL: nats://nats:4222
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_ENDPOINT}
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-      REDIS_PASSWORD_FILE: /run/secrets/redis_password
-      JWT_SECRET_FILE: /run/secrets/jwt_secret
-      NATS_PASSWORD_FILE: /run/secrets/nats_password
     secrets:
-      - source: postgres_password
-        mode: 0444
-      - source: redis_password
-        mode: 0444
-      - source: jwt_secret
-        mode: 0444
-      - source: nats_password
-        mode: 0444
+      - redis_password
+      - postgres_password
+      - jwt_secret
     networks:
+      - edge
       - internal
       - observability
     depends_on:
@@ -184,8 +193,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      nats:
+      auth:
         condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:${GATEWAY_PORT}/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # OpenTelemetry Collector
   otel-collector:
@@ -271,8 +287,7 @@ services:
         export NATS_PASSWORD=$(cat /run/secrets/nats_password)
         exec nats-server -c /etc/nats/nats.conf
     secrets:
-      - source: nats_password
-        mode: 0444
+      - nats_password
     volumes:
       - ./nats/nats.conf:/etc/nats/nats.conf:ro
       - nats_data:/data
@@ -293,8 +308,7 @@ services:
     environment:
       GARAGE_RPC_SECRET_FILE: /run/secrets/garage_rpc_secret
     secrets:
-      - source: garage_rpc_secret
-        mode: 0444
+      - garage_rpc_secret
     volumes:
       - ./garage/garage.toml:/etc/garage.toml:ro
       - garage_data:/var/lib/garage
@@ -323,8 +337,7 @@ services:
       GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor traceToMetrics"
       GF_EXPLORE_ENABLED: "true"
     secrets:
-      - source: grafana_password
-        mode: 0444
+      - grafana_password
     volumes:
       - grafana_data:/var/lib/grafana
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro

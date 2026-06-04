@@ -12,6 +12,11 @@ services:
     ports:
       - "3001:3000"
 
+  garage:
+    ports:
+      - "9000:9000"
+      - "3903:3903"
+
   gateway:
     volumes:
       - ../preeit-gateway:/app
