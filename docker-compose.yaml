@@ -155,7 +155,7 @@ services:
   gateway:
     image: preeit-gateway:latest
     build:
-      context: ../pree-it-gateway # sibling repo checkout
+      context: ../pree-it-gateway
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -165,7 +165,6 @@ services:
       REDIS_ADDR: redis:6379
       POSTGRES_DSN: "host=postgres user=${POSTGRES_USER} dbname=${POSTGRES_DB} sslmode=disable"
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_ENDPOINT}
-      # Secrets injected via files - read at startup
       REDIS_PASSWORD_FILE: /run/secrets/redis_password
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       JWT_SECRET_FILE: /run/secrets/jwt_secret
