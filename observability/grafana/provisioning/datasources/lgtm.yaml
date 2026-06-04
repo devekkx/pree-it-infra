@@ -1,7 +1,6 @@
 apiVersion: 1
 
 datasources:
-  # Mimir (Prometheus-compatible)
   - name: Mimir
     type: prometheus
     uid: mimir
@@ -13,11 +12,10 @@ datasources:
       timeInterval: 15s
       exemplarTraceIdDestinations:
         - name: trace_id
-          datasourceUid: tempo # click metric → jump to trace
+          datasourceUid: tempo
     secureJsonData:
-      httpHeaderValue1: chat
+      httpHeaderValue1: pree-it
 
-  # Loki
   - name: Loki
     type: loki
     uid: loki
@@ -25,20 +23,12 @@ datasources:
     access: proxy
     jsonData:
       derivedFields:
-        # Extract trace_id from structured logs and link to Tempo
         - matcherRegex: '"trace_id":"(\w+)"'
           name: TraceID
           url: "$${__value.raw}"
           datasourceUid: tempo
-          urlDisplayLabel: "View Trace in Tempo"
-        # Also handle plain trace_id= format
-        - matcherRegex: 'trace_id=(\w+)'
-          name: TraceID
-          url: "$${__value.raw}"
-          datasourceUid: tempo
-          urlDisplayLabel: "View Trace in Tempo"
+          urlDisplayLabel: "View Trace"
 
-  # Tempo
   - name: Tempo
     type: tempo
     uid: tempo
@@ -46,36 +36,13 @@ datasources:
     access: proxy
     jsonData:
       tracesToLogsV2:
-        datasourceUid: loki # click trace span → jump to logs
+        datasourceUid: loki
         filterByTraceID: true
-        filterBySpanID: false
-        tags:
-          - key: service.name
-            value: service
       tracesToMetrics:
-        datasourceUid: mimir # click trace → jump to metrics
-        tags:
-          - key: service.name
-            value: job
-        queries:
-          - name: "Request Rate"
-            query: "sum(rate(traces_spanmetrics_calls_total{$$__tags}[5m]))"
-          - name: "Error Rate"
-            query: 'sum(rate(traces_spanmetrics_calls_total{$$__tags,status_code="STATUS_CODE_ERROR"}[5m]))'
+        datasourceUid: mimir
       serviceMap:
-        datasourceUid: mimir # service graph from Tempo metrics_generator
+        datasourceUid: mimir
       nodeGraph:
         enabled: true
-      search:
-        hide: false
       lokiSearch:
         datasourceUid: loki
-
-  # Alertmanager (future)
-  - name: Alertmanager
-    type: alertmanager
-    uid: alertmanager
-    url: http://mimir:9009/alertmanager
-    access: proxy
-    jsonData:
-      implementation: mimir

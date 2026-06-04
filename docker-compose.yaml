@@ -61,34 +61,6 @@ services:
       retries: 3
       start_period: 10s
 
-  # MinIO (object storage - images, files, voice notes)
-  minio:
-    image: minio/minio:RELEASE.2024-05-01T01-11-10Z
-    restart: unless-stopped
-    command: >
-      sh -c "minio server /data
-             --console-address ':9001'
-             --address ':9000'"
-    environment:
-      MINIO_ROOT_USER: preeit_admin
-      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
-    secrets:
-      - minio_root_password
-    volumes:
-      - minio_data:/data
-    networks:
-      - internal
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "mc ready local 2>/dev/null || wget -qO- http://localhost:9000/minio/health/live",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
   #  PostgreSQL
   postgres:
     image: postgres:16-alpine
@@ -132,24 +104,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-
-  #  NATS
-  nats:
-    image: nats:2.10-alpine
-    restart: unless-stopped
-    command: ["-c", "/etc/nats/nats.conf"]
-    secrets:
-      - nats_password
-    volumes:
-      - ./nats/nats.conf:/etc/nats/nats.conf:ro
-      - nats_data:/data
-    networks:
-      - internal
-    healthcheck:
-      test: ["CMD", "nats-server", "--health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
 
   #  Gateway Service
   gateway:
@@ -227,9 +181,9 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.101.0
     restart: unless-stopped
-    command: ["--config=/etc/otel/otel-collector.yml"]
+    command: ["--config=/etc/otel/otel-collector.yaml"]
     volumes:
-      - ./observability/otel-collector.yml:/etc/otel/otel-collector.yml:ro
+      - ./observability/otel-collector.yaml:/etc/otel/otel-collector.yaml:ro
     networks:
       - observability
       - internal
@@ -247,9 +201,9 @@ services:
   loki:
     image: grafana/loki:3.0.0
     restart: unless-stopped
-    command: ["-config.file=/etc/loki/loki.yml"]
+    command: ["-config.file=/etc/loki/loki.yaml"]
     volumes:
-      - ./observability/loki/loki.yml:/etc/loki/loki.yml:ro
+      - ./observability/loki/loki.yaml:/etc/loki/loki.yaml:ro
       - loki_data:/loki
     networks:
       - observability
@@ -264,9 +218,9 @@ services:
   tempo:
     image: grafana/tempo:2.4.1
     restart: unless-stopped
-    command: ["-config.file=/etc/tempo/tempo.yml"]
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
     volumes:
-      - ./observability/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - ./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
       - tempo_data:/var/tempo
     networks:
       - observability
@@ -282,10 +236,10 @@ services:
     image: grafana/mimir:2.12.0
     restart: unless-stopped
     command:
-      - "--config.file=/etc/mimir/mimir.yml"
+      - "--config.file=/etc/mimir/mimir.yaml"
       - "--target=all" # monolithic mode for Phase 1
     volumes:
-      - ./observability/mimir/mimir.yml:/etc/mimir/mimir.yml:ro
+      - ./observability/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro
       - mimir_data:/data/mimir
     networks:
       - observability
@@ -296,16 +250,69 @@ services:
       timeout: 5s
       retries: 5
 
-  # Grafana
+  #  NATS
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    entrypoint:
+      - sh
+      - -c
+      - |
+        export NATS_PASSWORD=$(cat /run/secrets/nats_password)
+        exec nats-server -c /etc/nats/nats.conf
+    secrets:
+      - nats_password
+    volumes:
+      - ./nats/nats.conf:/etc/nats/nats.conf:ro
+      - nats_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  #  MinIO
+  minio:
+    image: minio/minio:RELEASE.2024-05-01T01-11-10Z
+    restart: unless-stopped
+    entrypoint:
+      - sh
+      - -c
+      - |
+        export MINIO_ROOT_PASSWORD=$(cat /run/secrets/minio_root_password)
+        exec minio server /data --console-address ':9001' --address ':9000'
+    environment:
+      MINIO_ROOT_USER: chat_admin
+    secrets:
+      - minio_root_password
+    volumes:
+      - minio_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  #  Grafana
   grafana:
     image: grafana/grafana:11.0.0
     restart: unless-stopped
+    entrypoint:
+      - sh
+      - -c
+      - |
+        export GF_SECURITY_ADMIN_PASSWORD=$(cat /run/secrets/grafana_password)
+        exec /run.sh
     environment:
-      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor traceToMetrics"
-      # Correlate logs → traces automatically
       GF_EXPLORE_ENABLED: "true"
     secrets:
       - grafana_password
@@ -316,12 +323,16 @@ services:
       - observability
       - edge
     depends_on:
-      - loki
-      - tempo
-      - mimir
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+      mimir:
+        condition: service_healthy
     healthcheck:
       test:
         ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 20s

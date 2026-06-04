@@ -21,7 +21,7 @@ schema_config:
     - from: 2024-01-01
       store: tsdb
       object_store: filesystem
-      schema: v13 # latest schema - best query performance
+      schema: v13
       index:
         prefix: index_
         period: 24h
@@ -38,16 +38,8 @@ compactor:
   retention_enabled: true
 
 limits_config:
-  retention_period: 744h # 31 days
+  retention_period: 744h
   max_query_lookback: 744h
-  max_query_series_limit: 10000
   ingestion_rate_mb: 16
   ingestion_burst_size_mb: 32
-  # Correlate with Tempo: allow Loki → Tempo trace links
   max_entries_limit_per_query: 10000
-
-ruler:
-  alertmanager_url: http://localhost:9093
-
-# Derived fields: extract TraceID from logs and link to Tempo
-# (Grafana datasource config handles the UI part - see below)

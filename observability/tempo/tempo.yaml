@@ -18,7 +18,7 @@ ingester:
 
 compactor:
   compaction:
-    block_retention: 336h # 14 days
+    block_retention: 336h
 
 storage:
   trace:
@@ -29,19 +29,17 @@ storage:
       path: /var/tempo/wal
 
 metrics_generator:
-  # Generate RED metrics (rate, errors, duration) from traces automatically
-  # These are pushed to Mimir - no manual instrumentation needed for basic metrics
   registry:
     external_labels:
       source: tempo
-      cluster: chat-local
+      cluster: pree-it-local
   storage:
     path: /var/tempo/generator/wal
     remote_write:
       - url: http://mimir:9009/api/v1/push
         send_exemplars: true
         headers:
-          X-Scope-OrgID: chat
+          X-Scope-OrgID: pree-it
   processors:
     - service-graphs
     - span-metrics
