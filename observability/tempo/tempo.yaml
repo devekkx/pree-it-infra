@@ -40,9 +40,6 @@ metrics_generator:
         send_exemplars: true
         headers:
           X-Scope-OrgID: pree-it
-  processors:
-    - service-graphs
-    - span-metrics
 
 overrides:
   defaults:

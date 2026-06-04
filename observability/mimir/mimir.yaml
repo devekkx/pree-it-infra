@@ -9,16 +9,14 @@ common:
   storage:
     backend: filesystem
     filesystem:
-      dir: /data/mimir
+      dir: /data/mimir/blocks
 
 blocks_storage:
   backend: filesystem
   filesystem:
-    dir: /data/mimir
+    dir: /data/mimir/blocks
   tsdb:
     dir: /data/mimir/tsdb
-    block_ranges_period: [2h]
-    retention_period: 0
 
 compactor:
   data_dir: /data/mimir/compactor
@@ -42,11 +40,13 @@ store_gateway:
     replication_factor: 1
 
 ruler:
-  rule_path: /data/mimir/rules
-  alertmanager_url: http://localhost:9093
+  rule_path: /data/mimir/ruler
+  storage:
+    type: local
+    local:
+      directory: /data/mimir/ruler-storage
 
 limits:
-  # Per-tenant retention
   compactor_blocks_retention_period: 720h
   max_global_series_per_user: 1500000
   ingestion_rate: 150000
