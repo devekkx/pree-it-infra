@@ -73,7 +73,7 @@ declare -a SECRETS=(
   "jwt_secret:64:JWT signing secret (HS256)  must be at least 32 bytes after decode"
   "nats_password:32:NATS authentication password"
   "grafana_password:32:Grafana admin password"
-  "minio_root_password:32:MinIO root password"
+  "garage_rpc_secret:32:Garage cluster RPC secret"
 )
 
 #  Generate 

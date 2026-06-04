@@ -1,8 +1,8 @@
-# Local development conveniences -never used in CI/prod
+# Local development conveniences — never used in CI/prod
 services:
   postgres:
     ports:
-      - "5432:5432" # expose for local DB tools
+      - "5432:5432"
 
   redis:
     ports:
@@ -13,13 +13,9 @@ services:
       - "3001:3000"
 
   gateway:
-    build:
-      target: dev # uses air hot-reload stage
     volumes:
       - ../preeit-gateway:/app
 
   auth:
-    build:
-      target: dev
     volumes:
       - ../preeit-auth:/app

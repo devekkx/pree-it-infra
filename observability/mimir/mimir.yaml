@@ -41,10 +41,11 @@ store_gateway:
 
 ruler:
   rule_path: /data/mimir/ruler
-  storage:
-    type: local
-    local:
-      directory: /data/mimir/ruler-storage
+
+ruler_storage:
+  backend: local
+  local:
+    directory: /data/mimir/ruler-storage
 
 limits:
   compactor_blocks_retention_period: 720h

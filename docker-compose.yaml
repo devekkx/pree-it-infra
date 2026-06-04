@@ -9,8 +9,8 @@ secrets:
     file: ./secrets/jwt_secret.txt
   nats_password:
     file: ./secrets/nats_password.txt
-  minio_root_password:
-    file: ./secrets/minio_root_password.txt
+  garage_root_password:
+    file: ./secrets/garage_root_password.txt
   grafana_password:
     file: ./secrets/grafana_password.txt
 
@@ -26,7 +26,7 @@ volumes:
   loki_data:
   mimir_data:
   tempo_data:
-  minio_data:
+  garage_data:
 
 # Networks - all internal except the Caddy edge network
 
@@ -91,7 +91,8 @@ services:
       sh -c "redis-server /etc/redis/redis.conf
              --requirepass $$(cat /run/secrets/redis_password)"
     secrets:
-      - redis_password
+      - source: redis_password
+        mode: 0444
     volumes:
       - redis_data:/data
       - ./redis/redis.conf:/etc/redis/redis.conf:ro
@@ -111,6 +112,7 @@ services:
     build:
       context: ../pree-it-gateway
       dockerfile: Dockerfile
+      target: production
     restart: unless-stopped
     environment:
       APP_ENV: production
@@ -123,9 +125,12 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       JWT_SECRET_FILE: /run/secrets/jwt_secret
     secrets:
-      - redis_password
-      - postgres_password
-      - jwt_secret
+      - source: redis_password
+        mode: 0444
+      - source: postgres_password
+        mode: 0444
+      - source: jwt_secret
+        mode: 0444
     networks:
       - edge
       - internal
@@ -149,6 +154,7 @@ services:
     build:
       context: ../pree-it-auth
       dockerfile: Dockerfile
+      target: production
     restart: unless-stopped
     environment:
       APP_ENV: production
@@ -162,10 +168,14 @@ services:
       JWT_SECRET_FILE: /run/secrets/jwt_secret
       NATS_PASSWORD_FILE: /run/secrets/nats_password
     secrets:
-      - postgres_password
-      - redis_password
-      - jwt_secret
-      - nats_password
+      - source: postgres_password
+        mode: 0444
+      - source: redis_password
+        mode: 0444
+      - source: jwt_secret
+        mode: 0444
+      - source: nats_password
+        mode: 0444
     networks:
       - internal
       - observability
@@ -261,7 +271,8 @@ services:
         export NATS_PASSWORD=$(cat /run/secrets/nats_password)
         exec nats-server -c /etc/nats/nats.conf
     secrets:
-      - nats_password
+      - source: nats_password
+        mode: 0444
     volumes:
       - ./nats/nats.conf:/etc/nats/nats.conf:ro
       - nats_data:/data
@@ -274,27 +285,24 @@ services:
       retries: 3
       start_period: 10s
 
-  #  MinIO
-  minio:
-    image: minio/minio:RELEASE.2024-05-01T01-11-10Z
+  # Garage (S3-compatible object storage)
+  garage:
+    image: dxflrs/garage:v1.0.1
     restart: unless-stopped
-    entrypoint:
-      - sh
-      - -c
-      - |
-        export MINIO_ROOT_PASSWORD=$(cat /run/secrets/minio_root_password)
-        exec minio server /data --console-address ':9001' --address ':9000'
+    command: /garage server
     environment:
-      MINIO_ROOT_USER: chat_admin
+      GARAGE_RPC_SECRET_FILE: /run/secrets/garage_rpc_secret
     secrets:
-      - minio_root_password
+      - source: garage_rpc_secret
+        mode: 0444
     volumes:
-      - minio_data:/data
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage_data:/var/lib/garage
     networks:
       - internal
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:9000/minio/health/live"]
-      interval: 10s
+      test: ["CMD", "/garage", "status"]
+      interval: 15s
       timeout: 5s
       retries: 5
       start_period: 20s
@@ -315,7 +323,8 @@ services:
       GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor traceToMetrics"
       GF_EXPLORE_ENABLED: "true"
     secrets:
-      - grafana_password
+      - source: grafana_password
+        mode: 0444
     volumes:
       - grafana_data:/var/lib/grafana
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
