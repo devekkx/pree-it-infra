@@ -1,21 +1,9 @@
 #!/usr/bin/env bash
-#
 # generate-secrets.sh
-# Generates all Docker secrets required by the chat-infra stack.
-#
-# Usage:
-#   chmod +x scripts/generate-secrets.sh
-#   ./scripts/generate-secrets.sh
-#
-# Safety rules:
-#   - Never overwrites an existing secret (run with --force to regenerate)
-#   - Never commits secrets (verifies .gitignore before writing)
-#   - Requires openssl  fails fast if not found
-#
+# Generates all Docker secrets required by the pree-it-infra stack.
 
 set -euo pipefail
 
-#  Colours 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -23,18 +11,15 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-#  Helpers 
 info()    { echo -e "${CYAN}[info]${RESET}  $*"; }
 success() { echo -e "${GREEN}[ok]${RESET}    $*"; }
 warn()    { echo -e "${YELLOW}[warn]${RESET}  $*"; }
 die()     { echo -e "${RED}[error]${RESET} $*" >&2; exit 1; }
 
-#  Resolve script location  works regardless of where you call it from 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SECRETS_DIR="${REPO_ROOT}/secrets"
 
-#  Parse flags 
 FORCE=false
 for arg in "$@"; do
   case "$arg" in
@@ -50,35 +35,31 @@ for arg in "$@"; do
   esac
 done
 
-#  Preflight checks 
 command -v openssl &>/dev/null || die "openssl is required but not installed."
 
-# Ensure secrets/ is in .gitignore before writing anything
 GITIGNORE="${REPO_ROOT}/.gitignore"
 if ! grep -qxF "secrets/" "${GITIGNORE}" 2>/dev/null; then
   die ".gitignore does not contain 'secrets/'. Add it before running this script.\n  echo 'secrets/' >> .gitignore"
 fi
 
-#  Create secrets directory 
 mkdir -p "${SECRETS_DIR}"
-# Owner read/write only  no group or other access
 chmod 700 "${SECRETS_DIR}"
 
-#  Secret definitions 
-# Format: "filename:byte_length:description"
-# byte_length is passed to openssl rand -base64  output will be longer due to base64 encoding.
+# Format: "filename:description:encoding:byte_length"
+# encoding: base64 | hex
+# hex is required for secrets that must be exactly N bytes of raw entropy
+# (e.g. Garage RPC secret requires 32 raw bytes = 64 hex chars)
 declare -a SECRETS=(
-  "postgres_password:32:PostgreSQL superuser password"
-  "redis_password:32:Redis AUTH password"
-  "jwt_secret:64:JWT signing secret (HS256)  must be at least 32 bytes after decode"
-  "nats_password:32:NATS authentication password"
-  "grafana_password:32:Grafana admin password"
-  "garage_rpc_secret:32:Garage cluster RPC secret"
+  "postgres_password:PostgreSQL superuser password:base64:32"
+  "redis_password:Redis AUTH password:base64:32"
+  "jwt_secret:JWT signing secret — min 32 bytes after decode:base64:64"
+  "nats_password:NATS authentication password:base64:32"
+  "grafana_password:Grafana admin password:base64:32"
+  "garage_rpc_secret:Garage cluster RPC secret — must be 64 hex chars:hex:32"
 )
 
-#  Generate 
 echo ""
-echo -e "${BOLD}chat-infra secret generation${RESET}"
+echo -e "${BOLD}pree-it-infra secret generation${RESET}"
 echo -e "Target directory: ${SECRETS_DIR}"
 echo ""
 
@@ -86,30 +67,52 @@ GENERATED=0
 SKIPPED=0
 
 for entry in "${SECRETS[@]}"; do
-  IFS=':' read -r filename byte_len description <<< "${entry}"
+  IFS=':' read -r filename description encoding byte_len <<< "${entry}"
   filepath="${SECRETS_DIR}/${filename}.txt"
 
   if [[ -f "${filepath}" ]] && [[ "${FORCE}" == false ]]; then
-    warn "Skipping ${filename}.txt  already exists (use --force to regenerate)"
+    warn "Skipping ${filename}.txt — already exists (use --force to regenerate)"
     (( SKIPPED++ )) || true
     continue
   fi
 
-  if [[ -f "${filepath}" ]] && [[ "${FORCE}" == true ]]; then
-    warn "Regenerating ${filename}.txt  existing sessions will be invalidated"
+  if [[ "${encoding}" == "hex" ]]; then
+    openssl rand -hex "${byte_len}" | tr -d '\n' > "${filepath}"
+  else
+    openssl rand -base64 "${byte_len}" | tr -d '\n' > "${filepath}"
   fi
 
-  # Generate secret  strip trailing newline/whitespace
-  openssl rand -base64 "${byte_len}" | tr -d '\n' > "${filepath}"
-
-  # Owner read-only  prevents accidental modification
+  # Default: owner read-only
   chmod 600 "${filepath}"
-
   success "Generated ${filename}.txt (${description})"
   (( GENERATED++ )) || true
 done
 
-#  Summary 
+# Per-service permission requirements
+#
+# Docker Compose mounts file-based secrets as root:root 0400 by default.
+# Services running as non-root users cannot read 0400 secrets owned by root.
+#
+# Grafana runs as uid 472 (hardcoded in the official image).
+# Setting grafana_password.txt to 0444 allows uid 472 to read it while
+# keeping it unwritable by anyone. This is acceptable because the file
+# contains only a password that is also stored in the Grafana database —
+# world-readability on the host is the same risk as any other config file.
+#
+if [[ -f "${SECRETS_DIR}/grafana_password.txt" ]]; then
+  chmod 0444 "${SECRETS_DIR}/grafana_password.txt"
+  info "grafana_password.txt → 0444 (Grafana uid 472 requires world-read)"
+fi
+
+# auth and gateway run as uid 10001 (app user in alpine production image)
+# secrets must be world-readable for the non-root process to read them
+for secret in postgres_password redis_password jwt_secret nats_password; do
+  if [[ -f "${SECRETS_DIR}/${secret}.txt" ]]; then
+    chmod 0444 "${SECRETS_DIR}/${secret}.txt"
+    info "${secret}.txt → 0444 (app uid 10001 requires world-read)"
+  fi
+done
+
 echo ""
 echo -e "${BOLD}Summary${RESET}"
 echo -e "  Generated : ${GREEN}${GENERATED}${RESET}"
@@ -118,9 +121,8 @@ echo ""
 
 if [[ "${GENERATED}" -gt 0 ]]; then
   info "Secrets written to: ${SECRETS_DIR}/"
-  info "Permissions set to 600 (owner read-only)"
-  info "Directory permissions set to 700 (owner only)"
+  info "Directory permissions: 700 (owner only)"
   echo ""
   echo -e "${YELLOW}Never commit the secrets/ directory.${RESET}"
-  echo -e "Verify: ${CYAN}cat .gitignore | grep secrets${RESET}"
+  echo -e "Verify: ${CYAN}grep secrets .gitignore${RESET}"
 fi

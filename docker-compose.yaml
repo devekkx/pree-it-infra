@@ -87,9 +87,17 @@ services:
   redis:
     image: redis:7.2-alpine
     restart: unless-stopped
-    command: >
-      sh -c "redis-server /etc/redis/redis.conf
-             --requirepass $$(cat /run/secrets/redis_password)"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        PASS=$$(cat /run/secrets/redis_password)
+        if [ -z "$$PASS" ]; then
+          echo "[FATAL] redis_password secret is empty or unreadable" >&2
+          exit 1
+        fi
+        echo "[INFO] Redis starting with password ($${#PASS} chars)"
+        exec redis-server /etc/redis/redis.conf --requirepass "$$PASS"
     secrets:
       - redis_password
     volumes:
@@ -98,8 +106,9 @@ services:
     networks:
       - internal
     healthcheck:
-      test: >
-        sh -c "redis-cli -a $$(cat /run/secrets/redis_password) ping | grep PONG"
+      test:
+        - CMD-SHELL
+        - redis-cli -a "$$(cat /run/secrets/redis_password)" ping | grep -q PONG
       interval: 10s
       timeout: 5s
       retries: 5
@@ -109,7 +118,7 @@ services:
   auth:
     image: preeit-auth:latest
     build:
-      context: ../preeit-auth
+      context: ../pree-it-auth
       dockerfile: Dockerfile
       target: production
     restart: unless-stopped
@@ -117,10 +126,10 @@ services:
       - sh
       - -c
       - |
-        export JWT_SECRET=$(cat /run/secrets/jwt_secret)
-        export POSTGRES_PASSWORD=$(cat /run/secrets/postgres_password)
-        export REDIS_PASSWORD=$(cat /run/secrets/redis_password)
-        export NATS_PASSWORD=$(cat /run/secrets/nats_password)
+        export JWT_SECRET=$$(cat /run/secrets/jwt_secret)
+        export POSTGRES_PASSWORD=$$(cat /run/secrets/postgres_password)
+        export REDIS_PASSWORD=$$(cat /run/secrets/redis_password)
+        export NATS_PASSWORD=$$(cat /run/secrets/nats_password)
         exec /auth
     environment:
       APP_ENV: production
@@ -154,11 +163,11 @@ services:
       retries: 3
       start_period: 15s
 
-  #  API Gateway
+  # API Gateway
   gateway:
     image: preeit-gateway:latest
     build:
-      context: ../preeit-gateway
+      context: ../pree-it-gateway
       dockerfile: Dockerfile
       target: production
     restart: unless-stopped
@@ -166,9 +175,9 @@ services:
       - sh
       - -c
       - |
-        export JWT_SECRET=$(cat /run/secrets/jwt_secret)
-        export REDIS_PASSWORD=$(cat /run/secrets/redis_password)
-        export POSTGRES_PASSWORD=$(cat /run/secrets/postgres_password)
+        export JWT_SECRET=$$(cat /run/secrets/jwt_secret)
+        export REDIS_PASSWORD=$$(cat /run/secrets/redis_password)
+        export POSTGRES_PASSWORD=$$(cat /run/secrets/postgres_password)
         exec /gateway
     environment:
       APP_ENV: production
@@ -284,7 +293,7 @@ services:
       - sh
       - -c
       - |
-        export NATS_PASSWORD=$(cat /run/secrets/nats_password)
+        export NATS_PASSWORD=$$(cat /run/secrets/nats_password)
         exec nats-server -c /etc/nats/nats.conf
     secrets:
       - nats_password
@@ -302,13 +311,12 @@ services:
 
   # Garage (S3-compatible object storage)
   garage:
-    image: dxflrs/garage:v1.0.1
+    image: dxflrs/garage:v2.3.0
     restart: unless-stopped
     command: /garage server
-    environment:
-      GARAGE_RPC_SECRET_FILE: /run/secrets/garage_rpc_secret
     secrets:
-      - garage_rpc_secret
+      - source: garage_rpc_secret
+        mode: 0444
     volumes:
       - ./garage/garage.toml:/etc/garage.toml:ro
       - garage_data:/var/lib/garage
@@ -325,13 +333,19 @@ services:
   grafana:
     image: grafana/grafana:11.0.0
     restart: unless-stopped
+    # Grafana's official image runs as uid 472. Docker Compose mounts
+    # file-based secrets as root:root 0400 by default, which uid 472
+    # cannot read. We read the secret in the entrypoint before exec-ing
+    # the real Grafana process so the password is never in the compose
+    # file, .env, or container environment at rest.
     entrypoint:
       - sh
       - -c
       - |
-        export GF_SECURITY_ADMIN_PASSWORD=$(cat /run/secrets/grafana_password)
+        export GF_SECURITY_ADMIN_PASSWORD=$$(cat /run/secrets/grafana_password)
         exec /run.sh
     environment:
+      GF_SECURITY_ADMIN_USER: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor traceToMetrics"
