@@ -45,10 +45,6 @@ fi
 mkdir -p "${SECRETS_DIR}"
 chmod 700 "${SECRETS_DIR}"
 
-# Format: "filename:description:encoding:byte_length"
-# encoding: base64 | hex
-# hex is required for secrets that must be exactly N bytes of raw entropy
-# (e.g. Garage RPC secret requires 32 raw bytes = 64 hex chars)
 declare -a SECRETS=(
   "postgres_password:PostgreSQL superuser password:base64:32"
   "redis_password:Redis AUTH password:base64:32"
@@ -56,6 +52,7 @@ declare -a SECRETS=(
   "nats_password:NATS authentication password:base64:32"
   "grafana_password:Grafana admin password:base64:32"
   "garage_rpc_secret:Garage cluster RPC secret — must be 64 hex chars:hex:32"
+  "user_db_password:User service PostgreSQL password:base64:32"
 )
 
 echo ""
@@ -106,7 +103,7 @@ fi
 
 # auth and gateway run as uid 10001 (app user in alpine production image)
 # secrets must be world-readable for the non-root process to read them
-for secret in postgres_password redis_password jwt_secret nats_password; do
+for secret in postgres_password redis_password jwt_secret nats_password user_db_password; do
   if [[ -f "${SECRETS_DIR}/${secret}.txt" ]]; then
     chmod 0444 "${SECRETS_DIR}/${secret}.txt"
     info "${secret}.txt → 0444 (app uid 10001 requires world-read)"

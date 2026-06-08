@@ -13,6 +13,8 @@ secrets:
     file: ./secrets/garage_rpc_secret.txt
   grafana_password:
     file: ./secrets/grafana_password.txt
+  user_db_password:
+    file: ./secrets/user_db_password.txt
 
 # Named volumes
 
@@ -211,6 +213,43 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # user Service
+  user-service:
+    build:
+      context: ../preeit-user
+      dockerfile: Dockerfile
+      target: production
+    container_name: preeit-user-service
+    restart: unless-stopped
+    environment:
+      - USER_SERVICE_NAME=user-service
+      - USER_SERVICE_PORT=8083
+      - USER_ENVIRONMENT=production
+      - USER_DB_HOST=postgres
+      - USER_DB_PORT=5432
+      - USER_DB_USER=user_service
+      - USER_DB_NAME=preeit
+      - USER_DB_SSLMODE=disable
+      - USER_NATS_URL=nats://nats:4222
+      - USER_OTEL_ENDPOINT=otel-collector:4317
+    secrets:
+      - user_db_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    networks:
+      - preeit-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # OpenTelemetry Collector
   otel-collector:
