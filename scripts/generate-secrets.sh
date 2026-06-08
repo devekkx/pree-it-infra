@@ -53,6 +53,7 @@ declare -a SECRETS=(
   "grafana_password:Grafana admin password:base64:32"
   "garage_rpc_secret:Garage cluster RPC secret — must be 64 hex chars:hex:32"
   "user_db_password:User service PostgreSQL password:base64:32"
+  "chat_db_password:Chat service PostgreSQL password:base64:32"
 )
 
 echo ""
@@ -103,7 +104,7 @@ fi
 
 # auth and gateway run as uid 10001 (app user in alpine production image)
 # secrets must be world-readable for the non-root process to read them
-for secret in postgres_password redis_password jwt_secret nats_password user_db_password; do
+for secret in postgres_password redis_password jwt_secret nats_password user_db_password chat_db_password; do
   if [[ -f "${SECRETS_DIR}/${secret}.txt" ]]; then
     chmod 0444 "${SECRETS_DIR}/${secret}.txt"
     info "${secret}.txt → 0444 (app uid 10001 requires world-read)"

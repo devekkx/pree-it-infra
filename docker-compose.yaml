@@ -1,6 +1,8 @@
 # Top-level secrets - Docker reads plaintext files, injects as /run/secrets/*
 
 secrets:
+  chat_db_password:
+    file: ./secrets/chat_db_password.txt
   postgres_password:
     file: ./secrets/postgres_password.txt
   redis_password:
